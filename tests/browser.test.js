@@ -23,7 +23,12 @@ const session = { access_token: 'test-teacher-access', refresh_token: 'test-teac
 async function screenshot(page, name) {
   if (!process.env.EXAM_BROWSER_SCREENSHOTS) return;
   await mkdir(process.env.EXAM_BROWSER_SCREENSHOTS, { recursive: true });
-  await page.screenshot({ path: resolve(process.env.EXAM_BROWSER_SCREENSHOTS, name), fullPage: true });
+  const scroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
+  // Full-page Chromium capture includes fixed elements at the current scroll
+  // offset; capture from the top so hidden keyboard-only controls stay hidden.
+  await page.evaluate(() => scrollTo(0, 0));
+  try { await page.screenshot({ path: resolve(process.env.EXAM_BROWSER_SCREENSHOTS, name), fullPage: true }); }
+  finally { await page.evaluate(({ x, y }) => scrollTo(x, y), scroll); }
 }
 
 async function serve() {
@@ -41,7 +46,7 @@ async function serve() {
 }
 
 function fakeBackend() {
-  const state = { calls: [], exam: null, submission: null, essayScore: null };
+  const state = { calls: [], exam: null, submission: null, essayScore: null, authSession: session };
   const results = () => ({
     id: examId, title: state.exam.title, questions: state.exam.questions,
     submissions: state.submission ? [{
@@ -62,11 +67,11 @@ function fakeBackend() {
       const call = { path: url.pathname, query: url.search, body, authorization: request.headers().authorization };
       state.calls.push(call);
       let data;
-      if (url.pathname === '/auth/v1/signup' || url.pathname === '/auth/v1/token') data = session;
+      if (url.pathname === '/auth/v1/signup' || url.pathname === '/auth/v1/token') data = state.authSession;
       else if (url.pathname === '/auth/v1/logout') data = {};
       else {
         const operation = url.pathname.split('/').at(-1);
-        if (!['get_exam', 'submit_exam'].includes(operation)) assert.equal(call.authorization, `Bearer ${session.access_token}`, `Teacher authentication required for ${operation}`);
+        if (!['get_exam', 'submit_exam'].includes(operation)) assert.equal(call.authorization, `Bearer ${state.authSession.access_token}`, `Teacher authentication required for ${operation}`);
         switch (operation) {
           case 'list_exams': data = state.exam ? [{ id: examId, title: state.exam.title, total_points: 10, question_count: 2, submission_count: state.submission ? 1 : 0, created_at: '2026-10-05T00:00:00Z' }] : []; break;
           case 'create_exam':
@@ -155,6 +160,7 @@ test('browser: registration, teacher authoring, Pages link, student submission, 
     const written = page.locator('.question').nth(1);
     await written.locator('.prompt').fill('چرخه آب را توضیح دهید.');
     await written.locator('.points').fill('7.5');
+    await screenshot(page, 'exam-creator.png');
     await page.locator('#create-form button[type=submit]').click();
     await page.locator('#exam-link').waitFor();
     const link = await page.locator('#exam-link').inputValue();
@@ -184,6 +190,7 @@ test('browser: registration, teacher authoring, Pages link, student submission, 
     await student.locator('[name=last_name]').fill(malicious);
     await student.locator(`input[name="q-${mcqId}"][value="3"]`).check();
     await student.locator(`textarea[name="q-${essayId}"]`).fill(`پاسخ علمی ${malicious}`);
+    await screenshot(student, 'exam-student-mobile.png');
     await student.locator('#student-form button[type=submit]').click();
     await student.locator('text=آزمون را به پایان رساندید').waitFor();
     assert.equal(backend.state.submission.p_answers[mcqId].choice, 3);
@@ -191,17 +198,66 @@ test('browser: registration, teacher authoring, Pages link, student submission, 
     assert.equal(await student.locator('#student-form').count(), 0, 'Receipt must replace the editable submission form');
 
     await page.locator('.results').click();
-    await page.locator('.grade-form').waitFor({ state: 'attached' });
+    await page.locator('tbody tr').waitFor();
     assert.ok((await page.locator('tbody').textContent()).includes(malicious));
     assert.equal(await page.locator('#app img, #app script').count(), 0);
+    assert.equal(await page.locator('details .question').count(), 0, 'Collapsed student answers should be deferred until that student is opened');
     await page.locator('details summary').click();
+    await page.locator('.grade-form').waitFor({ state: 'attached' });
     const grading = page.locator('.grade-form');
     await grading.locator('[name=score]').fill('6.5');
+    const gradeCallsBefore = backend.state.calls.length;
+    await grading.evaluate(form => { window.__gradeForm = form; });
     await grading.locator('button').click();
     await page.locator('tbody').getByText('تصحیح کامل').waitFor();
     assert.equal(backend.state.essayScore, 6.5);
     assert.ok((await page.locator('tbody').textContent()).includes('۹'));
+    assert.deepEqual(backend.state.calls.slice(gradeCallsBefore).map(call => call.path), ['/rest/v1/rpc/grade_answer'], 'Grading should update the visible result using its RPC response without fetching every answer again');
+    assert.equal(await grading.evaluate(form => form === window.__gradeForm), true, 'Saving a grade must preserve the open form and its position');
+    assert.equal(await page.locator('details').getAttribute('open'), '', 'The student answers must stay open after a grade is saved');
     assert.equal(await page.evaluate(() => window.__xss), undefined);
+    await screenshot(page, 'exam-results.png');
+
+    // Returning through the UI reuses recent owner-scoped data. Explicit refresh
+    // must still discover changes made by a student or another teacher session.
+    const callsBeforeReturn = backend.state.calls.length;
+    await page.locator('#back').click();
+    await page.locator('.results').waitFor();
+    assert.equal(backend.state.calls.length, callsBeforeReturn, 'Returning to a recent dashboard should avoid another list request');
+    await page.locator('#refresh-exams').click();
+    await page.waitForFunction(() => document.querySelector('#exam-list')?.textContent.includes('۱ پاسخ'));
+    assert.equal(backend.state.calls.at(-1).path, '/rest/v1/rpc/list_exams');
+    const callsBeforeResultsReturn = backend.state.calls.length;
+    await page.locator('.results').click();
+    await page.locator('tbody tr').waitFor();
+    assert.equal(backend.state.calls.length, callsBeforeResultsReturn, 'Returning to recent results should reuse the saved grade');
+    assert.ok((await page.locator('tbody').textContent()).includes('۹ از ۱۰'));
+    backend.state.essayScore = 7;
+    await page.locator('#refresh-results').click();
+    await page.locator('tbody').getByText('۹٫۵ از ۱۰').waitFor();
+    assert.equal(backend.state.calls.at(-1).path, '/rest/v1/rpc/get_results');
+
+    // A second teacher must never see the first teacher's cached titles/results.
+    await page.locator('#logout').click();
+    await page.locator('#auth-form').waitFor();
+    backend.state.authSession = { ...session, access_token: 'second-teacher-access', refresh_token: 'second-teacher-refresh', user: { id: '55555555-5555-4555-8555-555555555555' } };
+    backend.state.exam.title = 'آزمون اختصاصی معلم دوم';
+    const listsBeforeSecondLogin = backend.state.calls.filter(call => call.path.endsWith('/list_exams')).length;
+    await page.locator('[name=username]').fill('Teacher_02');
+    await page.locator('[name=password]').fill('second-test-password');
+    await page.locator('#auth-form button[type=submit]').click();
+    await page.locator('.results').waitFor();
+    assert.equal(backend.state.calls.filter(call => call.path.endsWith('/list_exams')).length, listsBeforeSecondLogin + 1, 'Login as another teacher must fetch that teacher’s dashboard');
+    assert.ok((await page.locator('#exam-list').textContent()).includes('آزمون اختصاصی معلم دوم'));
+    await page.locator('.results').click();
+    await page.locator('tbody tr').waitFor();
+    assert.equal(backend.state.calls.at(-1).path, '/rest/v1/rpc/get_results', 'The first teacher’s result cache must not be reused after logout');
+    assert.ok((await page.locator('#app h1').textContent()).includes('آزمون اختصاصی معلم دوم'));
+    await page.locator('#back').click();
+    await page.locator('.results').waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Teacher dashboard should fit a mobile screen');
+    await screenshot(page, 'exam-dashboard-mobile.png');
     assert.deepEqual(pageErrors, []);
     await context.close();
     await studentContext.close();

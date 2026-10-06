@@ -21,7 +21,10 @@ test('PostgreSQL migration, teacher isolation, anonymous submission, grading and
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS
       'select nullif(current_setting(''request.jwt.claim.sub'', true), '''')::uuid';
     `);
-    await db.exec(await fs.readFile(new URL('../supabase/migrations/202610050001_initial.sql', import.meta.url), 'utf8'));
+    const migrationDirectory = new URL('../supabase/migrations/', import.meta.url);
+    for (const name of (await fs.readdir(migrationDirectory)).filter(name => name.endsWith('.sql')).sort()) {
+      await db.exec(await fs.readFile(new URL(name, migrationDirectory), 'utf8'));
+    }
     const a = '11111111-1111-4111-8111-111111111111';
     const b = '22222222-2222-4222-8222-222222222222';
     const questions = [

@@ -71,14 +71,14 @@ with r:
   });
 }
 
-const publicFiles = new Set(['index.html', '404.html', 'app.js', 'core.js', 'config.js', 'style.css']);
+const publicFiles = new Set(['index.html', '404.html', 'app.js', 'core.js', 'read-cache.js', 'config.js', 'style.css', 'assets/icon.svg', 'assets/fonts/vazirmatn-arabic.woff2', 'assets/fonts/vazirmatn-latin.woff2']);
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   let file = pathname === '/exam/' || pathname === '/exam' ? 'index.html' : pathname.replace(/^\/exam\//, '');
   let status = 200;
   if (/^\/exam\/id\/\d+\/?$/.test(pathname)) { file = '404.html'; status = 404; }
   if (!publicFiles.has(file)) { response.writeHead(404); response.end(); return; }
-  const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+  const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
   try { response.writeHead(status, { 'Content-Type': types[extname(file)] }); response.end(await readFile(resolve(repository, file))); }
   catch { response.writeHead(500); response.end(); }
 });
@@ -186,10 +186,11 @@ try {
   await studentPage.getByText('آزمون را به پایان رساندید').waitFor();
   stage = 'teacher grades and essay scoring';
   await page.locator('.results').click();
-  await page.locator('.grade-form').waitFor({ state: 'attached' });
+  await page.locator('tbody tr').waitFor();
   assert.ok((await page.locator('tbody').textContent()).includes('در انتظار تصحیح تشریحی'));
   assert.ok((await page.locator('tbody').textContent()).includes('۲ از ۵'));
   await page.locator('details summary').click();
+  await page.locator('.grade-form').waitFor({ state: 'attached' });
   await page.locator('.grade-form [name=score]').fill('2.5');
   await page.locator('.grade-form button').click();
   await page.locator('tbody').getByText('تصحیح کامل').waitFor();

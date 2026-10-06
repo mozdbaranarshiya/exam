@@ -9,6 +9,9 @@ import os
 from pathlib import Path
 import re
 import secrets
+import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
@@ -60,6 +63,21 @@ def check(condition, label):
     assert condition, label
     CHECKS += 1
     print('PASS:', label)
+
+
+def plugin(command, token, expected=0):
+    """Run the shipped native helper; keep the scoped key out of files/argv/logs."""
+    environment = dict(os.environ)
+    environment['EXAM_TEACHER_TOKEN'] = token
+    helper = ROOT / 'plugin/skills/instructions/scripts/exam_api.py'
+    process = subprocess.run([sys.executable, str(helper), *command], env=environment,
+                             capture_output=True, text=True, timeout=40)
+    if process.returncode != expected:
+        raise RuntimeError('Native plugin helper returned an unexpected exit status')
+    try:
+        return json.loads(process.stdout)
+    except (ValueError, UnicodeDecodeError):
+        raise RuntimeError('Native plugin helper did not return JSON') from None
 
 
 def teacher():
@@ -140,11 +158,42 @@ try:
     check(action_exam['url'] == 'https://mozdbaranarshiya.github.io/exam/id/' + str(action_exam['id']), 'Live GPT Action creates an exam and returns the correct Pages link')
     action_results = call(action + '/' + str(exam_id) + '/results', token=teacher_key, method='GET')
     check(action_results['submissions'][0]['total_score'] == 4.5, 'Live GPT Action reports the saved teacher grades')
+    # Validate the actual ZIP helper against the real endpoint, using only this
+    # run's teacher. Student content and questions are non-secret temporary data.
+    with tempfile.TemporaryDirectory(prefix='exam-plugin-smoke-') as folder:
+        source = Path(folder) / 'questions.json'
+        source.write_text(json.dumps({'title': 'آزمون موقت افزونه', 'questions': questions}), encoding='utf-8')
+        native_created = plugin(['create', '--input', str(source)], teacher_key)
+    check(native_created['url'].endswith('/id/' + str(native_created['id'])), 'Shipped native plugin helper creates an exam and receives its real link')
+    native_results = plugin(['results', '--id', str(exam_id)], teacher_key)
+    check(native_results['submissions'][0]['id'] == submission['id'], 'Native plugin helper reads only its teacher’s actual student results')
+    grade_args = ['grade', '--exam-id', str(exam_id), '--submission-id', submission['id'],
+                  '--question-id', essay['id'], '--score']
+    native_grade = plugin([*grade_args, '1.5'], teacher_key)
+    check(native_grade['score'] == 1.5 and native_grade['total_score'] == 3.5,
+          'Native plugin can record a lower essay grade and correct the total')
+    native_grade = plugin([*grade_args, '2.75'], teacher_key)
+    check(native_grade['score'] == 2.75 and native_grade['total_score'] == 4.75 and native_grade['status'] == 'graded',
+          'Native plugin can change that grade and returns the saved score and final status')
+    check(rpc('get_results', {'p_exam_id': exam_id}, a)['submissions'][0]['total_score'] == 4.75,
+          'Grades changed through ChatGPT API are visible to the web teacher session')
+    grade_path = action + '/' + str(exam_id) + '/grades'
+    grade_body = {'submission_id': submission['id'], 'question_id': essay['id'], 'score': 2}
+    call(grade_path, grade_body, other_key, method='PATCH', expected=403, code='forbidden')
+    check(True, 'Another teacher key cannot modify the essay grade')
+    call(grade_path, {**grade_body, 'score': 4}, teacher_key, method='PATCH', expected=400, code='invalid_input')
+    check(True, 'Live API rejects a grade above the declared question points')
+    call(grade_path, {**grade_body, 'question_id': mcq['id']}, teacher_key, method='PATCH', expected=400, code='invalid_input')
+    check(True, 'Live API prevents overwriting automatically scored multiple-choice answers')
+    call(action + '/' + str(action_exam['id']) + '/grades', grade_body, teacher_key, method='PATCH', expected=403, code='forbidden')
+    check(True, 'Live API rejects grading an answer through a different exam ID')
     call(action + '/' + str(exam_id) + '/results', token=other_key, method='GET', expected=403, code='forbidden')
     check(True, 'A different teacher key cannot access the exam’s results')
     rpc('revoke_api_tokens', token=a)
     call(action + '/' + str(exam_id) + '/results', token=teacher_key, method='GET', expected=401, code='unauthorized')
     check(True, 'Revoked teacher keys stop working immediately in the deployed Action')
+    call(grade_path, grade_body, teacher_key, method='PATCH', expected=401, code='unauthorized')
+    check(True, 'Revocation also disables API grade changes immediately')
     check(len(rpc('get_results', {'p_exam_id': exam_id}, a)['submissions']) == 1, 'Teacher session remains usable after API-key revocation')
     print(f'LIVE RESULT: {CHECKS} checks passed against deployed Supabase/Auth/Actions')
 finally:

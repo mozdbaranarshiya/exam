@@ -6,6 +6,8 @@ const apiBase = 'https://example.supabase.co/functions/v1/exam-api';
 const token = `exam_${'a'.repeat(96)}`;
 const config = { supabaseUrl: 'https://example.supabase.co', publishableKey: 'public-test-key' };
 const examId = 453395123456;
+const submissionId = '11111111-1111-4111-8111-111111111111';
+const questionId = '22222222-2222-4222-8222-222222222222';
 const validExam = {
   title: '  آزمون علوم  ',
   questions: [
@@ -19,6 +21,76 @@ const createRequest = (body = validExam, overrides = {}) => new Request(`${apiBa
   headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   body: JSON.stringify(body),
   ...overrides,
+});
+const gradeRequest = (body = { submission_id: submissionId, question_id: questionId, score: 1.5 }, overrides = {}) =>
+  new Request(`${apiBase}/exams/${examId}/grades`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body), ...overrides,
+  });
+
+test('registers and changes an essay score through the owner-scoped grading RPC', async () => {
+  let calls = 0;
+  const handler = createHandler(config, async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://example.supabase.co/rest/v1/rpc/api_grade_answer');
+    assert.equal(options.headers.apikey, 'public-test-key');
+    assert.equal(options.headers.Authorization, undefined);
+    assert.equal(options.redirect, 'error');
+    const args = JSON.parse(options.body);
+    assert.deepEqual(args, { p_token: token, p_exam_id: examId, p_submission_id: submissionId,
+      p_question_id: questionId, p_score: calls === 1 ? 1.5 : 0 });
+    return jsonResponse({ exam_id: examId, submission_id: submissionId, question_id: questionId,
+      score: args.p_score, total_score: args.p_score + 2, status: 'graded', hidden_token: token });
+  });
+  for (const score of [1.5, 0]) {
+    const response = await handler(gradeRequest({ submission_id: submissionId, question_id: questionId, score }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await response.json(), { exam_id: examId, submission_id: submissionId,
+      question_id: questionId, score, total_score: score + 2, status: 'graded' });
+  }
+  assert.equal(calls, 2);
+});
+
+test('grading rejects malformed IDs, scores and unsupported fields before the RPC', async () => {
+  const handler = createHandler(config, () => assert.fail('RPC must not be called'));
+  const grade = { submission_id: submissionId, question_id: questionId, score: 1.5 };
+  const invalid = [null, [], {}, { ...grade, owner_id: 'other' }, { ...grade, teacher_id: 'other' },
+    { ...grade, submission_id: 'student-name' }, { ...grade, question_id: 'question-number' },
+    { ...grade, submission_id: null }, { ...grade, question_id: `${questionId} extra` },
+    ...[-0.01, 100.01, 0.001, '1.5', null, undefined].map(score => ({ ...grade, score }))];
+  for (const body of invalid) assert.equal((await handler(gradeRequest(body))).status, 400);
+  assert.equal((await handler(gradeRequest(grade, { headers: { 'content-type': 'application/json' } }))).status, 401);
+  assert.equal((await handler(gradeRequest(grade, { headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain' } }))).status, 415);
+  assert.equal((await handler(gradeRequest(grade, { body: '{' }))).status, 400);
+  assert.equal((await handler(gradeRequest(grade, { method: 'POST' }))).status, 405);
+  for (const path of ['/exams/453395/grades', '/exams/1234567890123/grades', '/exams/unknown/grades']) {
+    assert.equal((await handler(new Request(`${apiBase}${path}`, { method: 'PATCH' }))).status, 404);
+  }
+});
+
+test('grading preserves sanitized token, ownership, bounds and missing-answer errors', async () => {
+  for (const [code, expected, errorCode] of [['28000', 401, 'unauthorized'], ['42501', 403, 'forbidden'],
+    ['22023', 400, 'invalid_input'], ['P0002', 404, 'not_found'], ['XX000', 502, 'upstream_error']]) {
+    const handler = createHandler(config, async () => jsonResponse({ code, message: `private ${token}` }, 400));
+    const result = await handler(gradeRequest());
+    assert.equal(result.status, expected);
+    const body = await result.json();
+    assert.equal(body.error.code, errorCode);
+    assert.equal(JSON.stringify(body).includes(token), false);
+  }
+});
+
+test('grading never accepts a mismatched or incomplete database acknowledgement', async () => {
+  const result = { exam_id: examId, submission_id: submissionId, question_id: questionId,
+    score: 1.5, total_score: 3.5, status: 'pending' };
+  for (const invalid of [null, [], { id: submissionId, total_score: 3.5, status: 'graded' },
+    { ...result, exam_id: 999999999999 }, { ...result, submission_id: questionId },
+    { ...result, question_id: submissionId }, { ...result, score: 2 }, { ...result, total_score: 1001 },
+    { ...result, total_score: 1 }, { ...result, total_score: null }, { ...result, status: 'unknown' }]) {
+    const response = await createHandler(config, async () => jsonResponse(invalid))(gradeRequest());
+    assert.equal(response.status, 502);
+  }
 });
 
 test('creates an owner-scoped exam and returns the GitHub Pages student link', async () => {
@@ -144,6 +216,7 @@ test('CORS supports the website and rejects unconfigured browser origins', async
   const response = await handler(new Request(`${apiBase}/exams`, { method: 'OPTIONS', headers: { origin: 'https://mozdbaranarshiya.github.io' } }));
   assert.equal(response.status, 204);
   assert.equal(response.headers.get('access-control-allow-origin'), 'https://mozdbaranarshiya.github.io');
+  assert.ok(response.headers.get('access-control-allow-methods').split(', ').includes('PATCH'));
   assert.equal(response.headers.get('access-control-allow-credentials'), null);
   const blocked = await handler(new Request(`${apiBase}/exams`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } }));
   assert.equal(blocked.status, 403);

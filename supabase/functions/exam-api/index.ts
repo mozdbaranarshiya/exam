@@ -7,6 +7,7 @@ type Question = {
   options?: string[];
   correct?: number;
 };
+type Grade = { submission_id: string; question_id: string; score: number };
 
 export type HandlerConfig = {
   supabaseUrl?: string;
@@ -18,6 +19,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 const EXAM_SITE_URL = "https://mozdbaranarshiya.github.io/exam";
 const DEFAULT_ORIGINS = ["https://mozdbaranarshiya.github.io"];
 const EXAM_ID = /^\d{12}$/;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -80,6 +82,21 @@ function validateExam(value: unknown): { title: string; questions: Question[] } 
   return { title, questions };
 }
 
+function validateGrade(value: unknown): Grade | string {
+  if (!isObject(value) || !hasOnlyKeys(value, ["submission_id", "question_id", "score"])) {
+    return "Provide an object with submission_id, question_id, and score.";
+  }
+  if (typeof value.submission_id !== "string" || !UUID.test(value.submission_id) ||
+    typeof value.question_id !== "string" || !UUID.test(value.question_id)) {
+    return "Provide valid submission and question UUIDs from this exam's results.";
+  }
+  if (typeof value.score !== "number" || !Number.isFinite(value.score) || value.score < 0 || value.score > 100 ||
+    Math.abs(value.score * 100 - Math.round(value.score * 100)) > 1e-8) {
+    return "The score must be between 0 and 100, with at most two decimal places.";
+  }
+  return { submission_id: value.submission_id.toLowerCase(), question_id: value.question_id.toLowerCase(), score: value.score };
+}
+
 async function readBody(request: Request): Promise<unknown> {
   const declaredLength = request.headers.get("content-length");
   if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > MAX_BODY_BYTES)) {
@@ -126,7 +143,7 @@ export function createHandler(config: HandlerConfig, requestFetch: typeof fetch 
     if (origin && allowedOrigins.has(origin)) {
       headers.set("Access-Control-Allow-Origin", origin);
       headers.set("Access-Control-Allow-Headers", "authorization, content-type");
-      headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
     }
     function respond(body: unknown, status = 200): Response {
       return new Response(JSON.stringify(body), { status, headers });
@@ -137,11 +154,12 @@ export function createHandler(config: HandlerConfig, requestFetch: typeof fetch 
 
     if (origin && !allowedOrigins.has(origin)) return fail(403, "forbidden", "This origin is not allowed.");
     const path = new URL(request.url).pathname.replace(/\/+$/, "");
-    const route = path.match(/^\/(?:functions\/v1\/)?exam-api\/exams(?:\/(\d{12})\/results)?$/);
+    const route = path.match(/^\/(?:functions\/v1\/)?exam-api\/exams(?:\/(\d{12})\/(results|grades))?$/);
     if (!route) return fail(404, "not_found", "Endpoint not found.");
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     const examId = route[1];
-    const requiredMethod = examId ? "GET" : "POST";
+    const grading = route[2] === "grades";
+    const requiredMethod = grading ? "PATCH" : examId ? "GET" : "POST";
     if (request.method !== requiredMethod) {
       headers.set("Allow", `${requiredMethod}, OPTIONS`);
       return fail(405, "method_not_allowed", `Use ${requiredMethod} for this endpoint.`);
@@ -153,7 +171,8 @@ export function createHandler(config: HandlerConfig, requestFetch: typeof fetch 
     }
 
     let payload: { title: string; questions: Question[] } | undefined;
-    if (!examId) {
+    let grade: Grade | undefined;
+    if (!examId || grading) {
       if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
         return fail(415, "unsupported_media_type", "Send an application/json request body.");
       }
@@ -164,16 +183,25 @@ export function createHandler(config: HandlerConfig, requestFetch: typeof fetch 
         if (error instanceof RangeError) return fail(413, "payload_too_large", "The request body must not exceed 256 KiB.");
         return fail(400, "invalid_input", "The request body must contain valid UTF-8 JSON.");
       }
-      const validated = validateExam(value);
-      if (typeof validated === "string") return fail(400, "invalid_input", validated);
-      payload = validated;
+      if (grading) {
+        const validated = validateGrade(value);
+        if (typeof validated === "string") return fail(400, "invalid_input", validated);
+        grade = validated;
+      } else {
+        const validated = validateExam(value);
+        if (typeof validated === "string") return fail(400, "invalid_input", validated);
+        payload = validated;
+      }
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const rpcName = examId ? "api_results" : "api_create_exam";
-      const args = examId
+      const rpcName = grading ? "api_grade_answer" : examId ? "api_results" : "api_create_exam";
+      const args = grading
+        ? { p_token: bearer[1], p_exam_id: Number(examId), p_submission_id: grade!.submission_id,
+            p_question_id: grade!.question_id, p_score: grade!.score }
+        : examId
         ? { p_token: bearer[1], p_exam_id: Number(examId) }
         : { p_token: bearer[1], p_title: payload!.title, p_questions: payload!.questions };
       const upstream = await requestFetch(`${config.supabaseUrl.replace(/\/+$/, "")}/rest/v1/rpc/${rpcName}`, {
@@ -188,11 +216,27 @@ export function createHandler(config: HandlerConfig, requestFetch: typeof fetch 
       if (!upstream.ok) {
         const code = isObject(result) ? result.code : undefined;
         if (code === "28000") return fail(401, "unauthorized", "The teacher API token is invalid, expired, or revoked.");
-        if (code === "42501") return fail(403, "forbidden", "This exam is unavailable for this teacher or token.");
-        if (code === "22023") return fail(400, "invalid_input", "The database rejected the exam input.");
+        if (code === "42501") return fail(403, "forbidden", grading
+          ? "This answer is unavailable for this teacher or token. Older tokens need a new teacher API key with grading permission."
+          : "This exam is unavailable for this teacher or token.");
+        if (code === "22023") return fail(400, "invalid_input", grading
+          ? "Grades must be for essay answers and within their question points, with at most two decimal places."
+          : "The database rejected the exam input.");
+        if (code === "P0002") return fail(404, "not_found", "The requested answer is unavailable.");
         return fail(502, "upstream_error", "The exam service could not complete the request. Please try again later.");
       }
       if (!isObject(result)) return fail(502, "upstream_error", "The exam service returned an invalid response.");
+      if (grading) {
+        if (String(result.exam_id) !== examId || result.submission_id !== grade!.submission_id ||
+          result.question_id !== grade!.question_id || result.score !== grade!.score ||
+          typeof result.total_score !== "number" || !Number.isFinite(result.total_score) ||
+          result.total_score < grade!.score || result.total_score > 1000 ||
+          (result.status !== "pending" && result.status !== "graded")) {
+          return fail(502, "upstream_error", "The exam service returned an invalid response.");
+        }
+        return respond({ exam_id: result.exam_id, submission_id: result.submission_id,
+          question_id: result.question_id, score: result.score, total_score: result.total_score, status: result.status });
+      }
       if (examId) {
         if (String(result.id) !== examId || !Array.isArray(result.questions) || !Array.isArray(result.submissions)) {
           return fail(502, "upstream_error", "The exam service returned an invalid response.");

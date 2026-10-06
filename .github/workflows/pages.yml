@@ -34,7 +34,8 @@ jobs:
       - name: Stage public files only
         run: |
           mkdir -p /tmp/exam-site
-          cp index.html 404.html app.js core.js style.css config.js .nojekyll /tmp/exam-site/
+          cp index.html 404.html app.js core.js read-cache.js style.css config.js .nojekyll /tmp/exam-site/
+          cp -R assets /tmp/exam-site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: /tmp/exam-site

@@ -1,6 +1,34 @@
 <!doctype html>
 <html lang="fa" dir="rtl">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#11685c"><title>آزمون‌ساز | پنل معلم</title><link rel="stylesheet" href="style.css"></head>
-<body><header><a href="./" class="brand">◈ آزمون‌ساز</a><span>از یک سؤال، تا یک کلاس</span><button id="logout" hidden>خروج</button></header>
-<main id="app"><p>در حال آماده‌سازی…</p></main><div id="notice" role="status" aria-live="polite"></div>
-<script src="config.js"></script><script type="module" src="app.js"></script></body></html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#132e2b">
+  <meta name="description" content="فضای کار معلمان برای طراحی آزمون، ارسال لینک به دانش‌آموزان و مشاهده کارنامه کلاس.">
+  <title>آزمون‌ساز | فضای کار معلمان</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="preload" href="assets/fonts/vazirmatn-arabic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#app">رفتن به محتوای صفحه</a>
+  <header class="site-header">
+    <a href="./" class="brand" aria-label="آزمون‌ساز، صفحه اصلی">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M16 8.5c-3-2.2-7.5-3.1-12-2v18c4.5-1.1 9-.2 12 2 3-2.2 7.5-3.1 12-2v-18c-4.5-1.1-9-.2-12 2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M16 8.5v18M8 12h4m-4 4h4m8-4h4m-4 4h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+      <span class="brand-text"><strong>آزمون‌ساز</strong><small>فضای کار معلمان</small></span>
+    </a>
+    <span class="header-subtitle">از یک سؤال، تا یک کلاس</span>
+    <nav class="sidebar-nav" aria-label="ناوبری معلم">
+      <span class="nav-label">فضای کاری</span>
+      <a id="dashboard-link" class="nav-link" href="./"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>آزمون‌های من</span></a>
+      <div class="sidebar-note"><span class="sidebar-note-icon" aria-hidden="true">✦</span><strong>برای یک کلاس بهتر</strong><p>طراحی کنید، به اشتراک بگذارید و مسیر یادگیری را ببینید.</p></div>
+    </nav>
+    <div class="header-actions"><button id="logout" class="logout-button" hidden><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10 5H5v14h5m5-14 7 7-7 7m7-7H10"/></svg><span>خروج از حساب</span></button></div>
+    <span class="sidebar-footer">آموزش، یک قدم جلوتر</span>
+  </header>
+  <main id="app" tabindex="-1"><div class="loading-state" role="status"><span class="loading-mark" aria-hidden="true"></span><p>در حال آماده‌سازی فضای کار…</p></div></main>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

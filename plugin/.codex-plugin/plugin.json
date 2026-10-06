@@ -1,0 +1,18 @@
+{
+  "author": {
+    "name": "GPT Creator"
+  },
+  "description": "ساخت آزمون، گزارش نتایج و ثبت نمره تشریحی با اتصال امن به حساب معلم.",
+  "interface": {
+    "capabilities": ["skills"],
+    "category": "Productivity",
+    "defaultPrompt": [],
+    "developerName": "GPT Creator",
+    "displayName": "آزمون‌ساز معلمان",
+    "longDescription": "ساخت آزمون تستی و تشریحی، دریافت لینک دانش‌آموز، خواندن نتایج واقعی و ثبت یا تغییر نمرات تشریحی با راهنمای اجرایی و ابزار همراه.",
+    "shortDescription": "ساخت آزمون و ثبت و دریافت نمرات معلم"
+  },
+  "name": "gpt-dd9c158920e3b52a6a6416b5aa24f424",
+  "skills": "./skills/",
+  "version": "0.2.0"
+}
