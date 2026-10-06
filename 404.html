@@ -1,0 +1,6 @@
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><title>آزمون‌ساز</title></head><body><script>
+// GitHub Pages routes arbitrary paths through 404.html.
+const match = location.pathname.match(/^(.*\/exam)\/id\/([0-9]+)\/?$/);
+if (match) location.replace(match[1] + '/?exam=' + encodeURIComponent(match[2]));
+else document.body.textContent = 'صفحه پیدا نشد';
+</script></body></html>

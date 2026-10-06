@@ -1,0 +1,1 @@
+{"name":"exam-teachers","private":true,"type":"module","scripts":{"dev":"python3 -m http.server 5173 --bind 0.0.0.0 --directory ..","test":"node --test","check":"node --check app.js && node --check core.js"}}

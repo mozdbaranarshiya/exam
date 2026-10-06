@@ -1,0 +1,6 @@
+project_id = "exam"
+
+[functions.exam-api]
+# This gateway uses opaque per-teacher API tokens checked by the database.
+# Supabase JWT verification would reject these tokens before the handler runs.
+verify_jwt = false

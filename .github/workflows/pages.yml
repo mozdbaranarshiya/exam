@@ -1,0 +1,43 @@
+name: Deploy exam site to GitHub Pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated test tools
+        run: npm install --prefix /tmp/exam-tools --ignore-scripts --no-audit --no-fund --save-exact playwright@1.63.0 @electric-sql/pglite@0.5.8
+      - name: Install verified browser
+        run: /tmp/exam-tools/node_modules/.bin/playwright install --with-deps chromium
+      - name: Validate application and database rules
+        run: npm run check && npm test
+        env:
+          EXAM_SQL_TOOLS: /tmp/exam-tools
+          EXAM_BROWSER_TOOLS: /tmp/exam-tools
+      - uses: actions/configure-pages@v5
+      - name: Stage public files only
+        run: |
+          mkdir -p /tmp/exam-site
+          cp index.html 404.html app.js core.js style.css config.js .nojekyll /tmp/exam-site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/exam-site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

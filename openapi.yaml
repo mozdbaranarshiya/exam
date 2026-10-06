@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: Teacher Exam Actions
+  version: 1.0.0
+  description: >-
+    Create exams and read the authenticated teacher's student results.
+    Use the teacher API token configured in the GPT Action authentication settings.
+    Never request a teacher's password or API token in conversation.
+servers:
+  - url: https://pukanizbahswrupscfmg.supabase.co/functions/v1/exam-api
+security:
+  - teacherToken: []
+paths:
+  /exams:
+    post:
+      operationId: createExam
+      summary: Create an exam and return its student link
+      description: >-
+        Create an exam for this teacher and show its returned url. MCQ requires four
+        options and correct index 0 to 3; essay omits options and correct. Include
+        points for every question; the total must not exceed 1000. Limit the JSON
+        request body to 256 KiB.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExamRequest'
+      responses:
+        '201':
+          description: Created exam with the student link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedExam'
+        '400':
+          $ref: '#/components/responses/InvalidInput'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/InvalidMediaType'
+        default:
+          $ref: '#/components/responses/ServiceError'
+  /exams/{id}/results:
+    get:
+      operationId: getExamResults
+      summary: Read the teacher's student scores and submitted answers
+      description: >-
+        Returns results only for an exam owned by the authenticated teacher.
+        A submission with status pending has essay answers awaiting teacher grading;
+        its total_score is preliminary. Describe pending scores as preliminary,
+        and never invent a score for an answer whose score is null.
+      x-openai-isConsequential: false
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The twelve-digit exam ID returned by createExam
+          schema:
+            type: string
+            pattern: '^[0-9]{12}$'
+            minLength: 12
+            maxLength: 12
+      responses:
+        '200':
+          description: The exam, answer key, and student submissions for this teacher
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExamResults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/ServiceError'
+components:
+  securitySchemes:
+    teacherToken:
+      type: http
+      scheme: bearer
+      bearerFormat: Opaque teacher API token
+      description: >-
+        A teacher-generated API token. Store it in GPT Action authentication settings,
+        never in the schema, GPT instructions, a prompt, or a public repository.
+  schemas:
+    CreateExamRequest:
+      type: object
+      additionalProperties: false
+      required: [title, questions]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/MultipleChoiceQuestion'
+              - $ref: '#/components/schemas/EssayQuestion'
+    MultipleChoiceQuestion:
+      type: object
+      additionalProperties: false
+      required: [type, prompt, points, options, correct]
+      properties:
+        type:
+          type: string
+          enum: [mcq]
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        points:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 100
+          multipleOf: 0.01
+        options:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1000
+        correct:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: Zero-based index of the correct option
+    EssayQuestion:
+      type: object
+      additionalProperties: false
+      required: [type, prompt, points]
+      properties:
+        type:
+          type: string
+          enum: [essay]
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        points:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 100
+          multipleOf: 0.01
+    CreatedExam:
+      type: object
+      required: [id, title, question_count, total_points, url]
+      properties:
+        id:
+          type: integer
+          minimum: 100000000000
+          maximum: 999999999999
+        title:
+          type: string
+        question_count:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total_points:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1000
+        url:
+          type: string
+          format: uri
+          description: Public student URL on GitHub Pages
+    ExamResults:
+      type: object
+      required: [id, title, questions, submissions]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/OwnerQuestion'
+        submissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Submission'
+    OwnerQuestion:
+      type: object
+      required: [id, type, prompt, points, options, correct]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [mcq, essay]
+        prompt:
+          type: string
+        points:
+          type: number
+        options:
+          type: [array, 'null']
+          items:
+            type: string
+        correct:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 3
+    Submission:
+      type: object
+      required: [id, first_name, last_name, total_score, max_score, status, created_at, answers]
+      properties:
+        id:
+          type: string
+          format: uuid
+        first_name:
+          type: string
+        last_name:
+          type: string
+        total_score:
+          type: number
+          description: Preliminary when status is pending; final when status is graded
+        max_score:
+          type: number
+        status:
+          type: string
+          enum: [pending, graded]
+        created_at:
+          type: string
+          format: date-time
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/StudentAnswer'
+    StudentAnswer:
+      type: object
+      required: [question_id, prompt, type, points, options, choice, text, score, correct]
+      properties:
+        question_id:
+          type: string
+          format: uuid
+        prompt:
+          type: string
+        type:
+          type: string
+          enum: [mcq, essay]
+        points:
+          type: number
+        options:
+          type: [array, 'null']
+          items:
+            type: string
+        choice:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 3
+        text:
+          type: [string, 'null']
+        score:
+          type: [number, 'null']
+          description: Null for an essay awaiting teacher grading
+        correct:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 3
+          description: Correct option index; null for essays
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+  responses:
+    InvalidInput:
+      description: Invalid exam input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing, invalid, expired, or revoked teacher API token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The exam is unavailable for this teacher or token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooLarge:
+      description: Request body exceeds 256 KiB
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InvalidMediaType:
+      description: Request content type must be application/json
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceError:
+      description: The API is unavailable or could not complete the request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
